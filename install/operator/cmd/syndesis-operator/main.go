@@ -15,6 +15,7 @@ import (
 	"github.com/syndesisio/syndesis/install/operator/pkg/stub"
 
 	"flag"
+
 	"github.com/sirupsen/logrus"
 	configuration "github.com/syndesisio/syndesis/install/operator/pkg/syndesis/configuration"
 )
@@ -29,6 +30,7 @@ func main() {
 	printVersion()
 
 	configuration.TemplateLocation = flag.String("template", "/conf/syndesis-template.yml", "Path to template used for installation")
+	configuration.AddonsDirLocation = flag.String("addons", "/conf/addons", "Path to the addons directory used for installation")
 	configuration.Registry = flag.String("registry", "docker.io", "Registry to use for loading images like the upgrade pod")
 
 	flag.Parse()

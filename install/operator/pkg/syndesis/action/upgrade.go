@@ -2,20 +2,26 @@ package action
 
 import (
 	"errors"
+	"strconv"
+	"strings"
+	"time"
+
+	v1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+
+	"github.com/operator-framework/operator-sdk/pkg/k8sclient"
 	"github.com/operator-framework/operator-sdk/pkg/sdk"
+
 	"github.com/sirupsen/logrus"
 	"github.com/syndesisio/syndesis/install/operator/pkg/apis/syndesis/v1alpha1"
+	"github.com/syndesisio/syndesis/install/operator/pkg/syndesis/addons"
 	"github.com/syndesisio/syndesis/install/operator/pkg/syndesis/configuration"
 	"github.com/syndesisio/syndesis/install/operator/pkg/syndesis/operation"
 	syndesistemplate "github.com/syndesisio/syndesis/install/operator/pkg/syndesis/template"
 	"github.com/syndesisio/syndesis/install/operator/pkg/util"
-	"k8s.io/api/core/v1"
-	k8serrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"strconv"
-	"strings"
-	"time"
 )
 
 const (
@@ -38,6 +44,18 @@ func (a *Upgrade) Execute(syndesis *v1alpha1.Syndesis) error {
 			return err
 		}
 		a.operatorVersion = operatorVersion
+	}
+
+	// Delete previously installed addons resources
+	addonResources, err := a.getAddonsResources(syndesis)
+	if err != nil {
+		return err
+	}
+	for _, addonResource := range addonResources {
+		err := sdk.Delete(addonResource)
+		if err != nil {
+			return err
+		}
 	}
 
 	namespaceVersion, err := configuration.GetSyndesisVersionFromNamespace(syndesis.Namespace)
@@ -71,6 +89,22 @@ func (a *Upgrade) Execute(syndesis *v1alpha1.Syndesis) error {
 				operation.SetNamespaceAndOwnerReference(res, syndesis)
 
 				err = createOrReplaceForce(res, true)
+				if err != nil {
+					return err
+				}
+			}
+
+			// Install addons
+			addons, err := addons.GetAddonsResources(syndesis)
+			if err != nil {
+				return err
+			}
+			for _, addon := range addons {
+				operation.SetLabel(addon, "syndesis.io/addon-resource", "true")
+
+				operation.SetNamespaceAndOwnerReference(addon, syndesis)
+
+				err = createOrReplaceForce(addon, true)
 				if err != nil {
 					return err
 				}
@@ -214,4 +248,60 @@ func (a *Upgrade) getUpgradePodFromNamespace(podTemplate *v1.Pod, syndesis *v1al
 
 	err := sdk.Get(&pod)
 	return &pod, err
+}
+
+func (a *Upgrade) getAddonsResources(syndesis *v1alpha1.Syndesis) ([]*unstructured.Unstructured, error) {
+	selector := metav1.ListOptions{
+		LabelSelector: "syndesis.io/addon-resource=true",
+	}
+
+	options := sdk.WithListOptions(&selector)
+
+	types, err := getTypes()
+	if err != nil {
+		return nil, err
+	}
+
+	res := make([]*unstructured.Unstructured, 0)
+	for _, t := range types {
+		list := metav1.List{
+			TypeMeta: t,
+		}
+		if err := sdk.List(syndesis.Namespace, &list, options); err != nil {
+			if k8serrors.IsNotFound(err) ||
+				k8serrors.IsForbidden(err) ||
+				k8serrors.IsMethodNotSupported(err) {
+				continue
+			}
+			return nil, err
+		}
+		for _, item := range list.Items {
+			o, err := util.LoadUnstructuredObject(item.Raw)
+			if err != nil {
+				return nil, err
+			}
+			res = append(res, o)
+		}
+	}
+
+	return res, nil
+}
+
+func getTypes() ([]metav1.TypeMeta, error) {
+	resources, err := k8sclient.GetKubeClient().Discovery().ServerPreferredNamespacedResources()
+	if err != nil {
+		return nil, err
+	}
+
+	types := make([]metav1.TypeMeta, 0)
+	for _, resource := range resources {
+		for _, r := range resource.APIResources {
+			types = append(types, metav1.TypeMeta{
+				Kind:       r.Kind,
+				APIVersion: resource.GroupVersion,
+			})
+		}
+	}
+
+	return types, nil
 }

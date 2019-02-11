@@ -2,11 +2,13 @@ package action
 
 import (
 	"errors"
-	"github.com/openshift/api/route/v1"
+
+	v1 "github.com/openshift/api/route/v1"
 	"github.com/operator-framework/operator-sdk/pkg/sdk"
 	"github.com/sirupsen/logrus"
 	"github.com/syndesisio/syndesis/install/operator/pkg/apis/syndesis/v1alpha1"
 	"github.com/syndesisio/syndesis/install/operator/pkg/openshift/serviceaccount"
+	"github.com/syndesisio/syndesis/install/operator/pkg/syndesis/addons"
 	"github.com/syndesisio/syndesis/install/operator/pkg/syndesis/operation"
 	syndesistemplate "github.com/syndesisio/syndesis/install/operator/pkg/syndesis/template"
 	corev1 "k8s.io/api/core/v1"
@@ -83,6 +85,22 @@ func (a *Install) Execute(syndesis *v1alpha1.Syndesis) error {
 		operation.SetNamespaceAndOwnerReference(res, syndesis)
 
 		err = createOrReplace(res)
+		if err != nil && !k8serrors.IsAlreadyExists(err) {
+			return err
+		}
+	}
+
+	// Install addons
+	addons, err := addons.GetAddonsResources(syndesis)
+	if err != nil {
+		return err
+	}
+	for _, addon := range addons {
+		operation.SetLabel(addon, "syndesis.io/addon-resource", "true")
+
+		operation.SetNamespaceAndOwnerReference(addon, syndesis)
+
+		err = createOrReplace(addon)
 		if err != nil && !k8serrors.IsAlreadyExists(err) {
 			return err
 		}
